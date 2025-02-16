@@ -1,0 +1,186 @@
+
+services:
+  # **Kafka Service**
+  kafka:
+    image: confluentinc/cp-kafka:latest
+    container_name: kafka
+    hostname: broker
+    ports:
+      - "9092:9092"
+      - "29092:29092"
+      - "29093:29093"
+    environment:
+      KAFKA_BROKER_ID: "1"
+      KAFKA_NODE_ID: "1"
+      CLUSTER_ID: "MKJ3OEVBNTcwNTJENDM2QK"
+      KAFKA_PROCESS_ROLES: "broker,controller"
+      KAFKA_CONTROLLER_QUORUM_VOTERS: "1@broker:29093"
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT,EXTERNAL:PLAINTEXT"
+      KAFKA_LISTENERS: "PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:29093,EXTERNAL://0.0.0.0:29092"
+      KAFKA_ADVERTISED_LISTENERS: "PLAINTEXT://broker:9092,EXTERNAL://localhost:29092"
+      KAFKA_CONTROLLER_LISTENER_NAMES: "CONTROLLER"
+      KAFKA_INTER_BROKER_LISTENER_NAME: "PLAINTEXT"
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: "1"
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: "1"
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: "1"
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: "0"
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    networks:
+      - kafka-network
+    healthcheck:
+      test: ["CMD", "kafka-topics", "--list", "--bootstrap-server", "localhost:9092"]
+      interval: 10s
+      retries: 5
+      start_period: 20s
+
+  kafka-connect:
+    image: confluentinc/cp-kafka-connect:latest
+    container_name: kafka-connect
+    ports:
+      - "8083:8083"
+    environment:
+      CONNECT_BOOTSTRAP_SERVERS: "broker:9092"
+      CONNECT_REST_ADVERTISED_HOST_NAME: "kafka-connect"
+      CONNECT_GROUP_ID: "kafka-connect-group"
+      CONNECT_CONFIG_STORAGE_TOPIC: "_connect-configs"
+      CONNECT_OFFSET_STORAGE_TOPIC: "_connect-offsets"
+      CONNECT_STATUS_STORAGE_TOPIC: "_connect-status"
+      CONNECT_KEY_CONVERTER: "org.apache.kafka.connect.storage.StringConverter"
+      CONNECT_VALUE_CONVERTER: "io.confluent.connect.avro.AvroConverter"
+      CONNECT_VALUE_CONVERTER_SCHEMA_REGISTRY_URL: "http://schema-registry:9095"
+      CONNECT_CONFIG_STORAGE_REPLICATION_FACTOR: "1"
+      CONNECT_OFFSET_STORAGE_REPLICATION_FACTOR: "1"
+      CONNECT_STATUS_STORAGE_REPLICATION_FACTOR: "1"
+      CONNECT_PLUGIN_PATH: "/usr/share/java"
+    depends_on:
+      - kafka
+      - schema-registry
+    networks:
+      - kafka-network
+
+  # **Schema Registry**
+  schema-registry:
+    image: confluentinc/cp-schema-registry:latest
+    container_name: schema-registry
+    ports:
+      - "9095:8081"
+    environment:
+      SCHEMA_REGISTRY_HOST_NAME: "schema-registry"
+      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: "PLAINTEXT://broker:9092"
+    depends_on:
+      kafka:
+        condition: service_healthy
+    networks:
+      - kafka-network
+
+  # **Redpanda Console**
+  redpanda-console:
+    image: docker.redpanda.com/redpandadata/console:latest
+    container_name: redpanda-console
+    ports:
+      - "8082:8080"
+    environment:
+      KAFKA_BROKERS: "broker:9092"
+      SCHEMA_REGISTRY_URL: "http://schema-registry:9095"
+      KAFKA_CONNECT_URL: "http://kafka-connect:8083"
+    depends_on:
+      kafka:
+        condition: service_healthy
+      schema-registry:
+        condition: service_started
+      kafka-connect:
+        condition: service_started
+    networks:
+      - kafka-network
+
+  # **Eventsim**
+  eventsim:
+    image: khoramism/event-generator-eventsim:1.2
+    container_name: eventsim
+    environment:
+      BOOTSTRAP_SERVERS: "broker:9092"
+      SECURITY_PROTOCOL: "PLAINTEXT"
+      SCHEMA_REGISTRY_URL: "http://schema-registry:8081"
+      CLIENT_DNS_LOOKUP: "use_all_dns_ips"
+      SESSION_TIMEOUT_MS: "45000"
+      SASL_JAAS_CONFIG: ""
+      SASL_MECHANISM: ""
+      KEY_SERIALIZER: "org.apache.kafka.common.serialization.ByteArraySerializer"
+      VALUE_SERIALIZER: "org.apache.kafka.common.serialization.ByteArraySerializer"
+      ACKS: "all"
+    command: ./bin/eventsim -c configs/Guitar-config.json --continuous --from 200 --nusers 2000 -k 1
+    depends_on:
+      kafka:
+        condition: service_healthy
+      schema-registry:
+        condition: service_started
+    networks:
+      - kafka-network
+
+  # **Hadoop Namenode**
+  namenode:
+    image: bde2020/hadoop-namenode:2.0.0-hadoop3.2.1-java8
+    container_name: namenode
+    environment:
+      CLUSTER_NAME: "amir-hadoop-cluster"
+    ports:
+      - "9870:9870"
+      - "9000:9000"
+    volumes:
+      - namenode-data:/hadoop/dfs/name
+    networks:
+      - hadoop-network
+
+  # **Hadoop Datanode**
+  datanode:
+    image: bde2020/hadoop-datanode:2.0.0-hadoop3.2.1-java8
+    container_name: datanode
+    environment:
+      CORE_CONF_fs_defaultFS: "hdfs://namenode:9000"
+    depends_on:
+      - namenode
+    volumes:
+      - datanode-data:/hadoop/dfs/data
+    networks:
+      - hadoop-network
+
+  # **Spark Master**
+  spark-master:
+    image: bitnami/spark:latest
+    container_name: spark-master
+    environment:
+      - SPARK_MODE=master
+    ports:
+      - "7077:7077"
+      - "8080:8080"
+    networks:
+      - spark-network
+
+  # **Spark Worker**
+  spark-worker:
+    image: bitnami/spark:latest
+    container_name: spark-worker
+    environment:
+      - SPARK_MODE=worker
+      - SPARK_MASTER_URL=spark://spark-master:7077
+    ports:
+      - "8081:8081"
+    depends_on:
+      - spark-master
+    networks:
+      - spark-network
+
+volumes:
+  kafka-data:
+  namenode-data:
+  datanode-data:
+
+networks:
+  kafka-network:
+    driver: bridge
+  hadoop-network:
+    driver: bridge
+  spark-network:
+    driver: bridge
