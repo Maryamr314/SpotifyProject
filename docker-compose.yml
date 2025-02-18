@@ -152,11 +152,15 @@ services:
     container_name: spark-master
     environment:
       - SPARK_MODE=master
+      - SPARK_SUBMIT_OPTIONS=--packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.0
     ports:
       - "7077:7077"
       - "8080:8080"
     networks:
       - spark-network
+      - kafka-network
+    volumes:
+      - ./spark/apps:/opt/bitnami/spark/apps 
 
   # **Spark Worker**
   spark-worker:
@@ -165,12 +169,16 @@ services:
     environment:
       - SPARK_MODE=worker
       - SPARK_MASTER_URL=spark://spark-master:7077
+      - SPARK_SUBMIT_OPTIONS=--packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.0
     ports:
       - "8081:8081"
     depends_on:
       - spark-master
     networks:
       - spark-network
+      - kafka-network
+    volumes:
+      - ./spark/apps:/opt/bitnami/spark/apps 
 
 volumes:
   kafka-data:
