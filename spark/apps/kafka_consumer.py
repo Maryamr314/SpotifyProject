@@ -1,22 +1,23 @@
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import from_json, col, from_unixtime
+from pyspark.sql.functions import (
+    from_json, col, from_unixtime, year, month,
+    dayofmonth, hour, date_format
+)
 from pyspark.sql.types import (
-    StructType, StructField, StringType, DoubleType, LongType, IntegerType
+    StructType, StructField, StringType, DoubleType,
+    LongType, IntegerType
 )
 
-def main():
-    spark = SparkSession.builder \
+def create_spark_session():
+    return SparkSession.builder \
         .appName("KafkaListenEventsConsumer") \
+        .config("spark.sql.sources.partitionOverwriteMode", "dynamic") \
+        .config("hive.exec.dynamic.partition", "true") \
+        .config("hive.exec.dynamic.partition.mode", "nonstrict") \
         .getOrCreate()
-    
 
-    spark.sparkContext.setLogLevel("WARN")
-    
-
-    kafka_bootstrap_servers = "broker:9092"  
-    kafka_topic = "listen_events"             
-    
-    schema = StructType([
+def create_event_schema():
+    return StructType([
         StructField("artist", StringType(), True),
         StructField("song", StringType(), True),
         StructField("duration", DoubleType(), True),
@@ -37,8 +38,32 @@ def main():
         StructField("gender", StringType(), True),
         StructField("registration", LongType(), True)
     ])
-    
 
+def process_batch(df, batch_id):
+    """Process each batch of streaming data"""
+    if df.isEmpty():
+        return
+
+    # Write to HDFS in Parquet format with partitioning
+    (df.write
+        .mode("append")
+        .partitionBy("year", "month", "day", "hour")
+        .format("parquet")
+        .save("hdfs://namenode:9000/user/events/bronze"))
+
+def main():
+    # Create Spark Session
+    spark = create_spark_session()
+    spark.sparkContext.setLogLevel("WARN")
+
+    # Kafka configuration
+    kafka_bootstrap_servers = "broker:9092"
+    kafka_topic = "listen_events"
+
+    # Create schema
+    schema = create_event_schema()
+
+    # Read from Kafka
     kafka_df = spark.readStream \
         .format("kafka") \
         .option("kafka.bootstrap.servers", kafka_bootstrap_servers) \
@@ -46,47 +71,30 @@ def main():
         .option("startingOffsets", "earliest") \
         .option("maxOffsetsPerTrigger", 10) \
         .load()
-    
-    # Convert the binary 'value' column to string and parse JSON
-    parsed_df = kafka_df.selectExpr("CAST(key AS STRING)", "CAST(value AS STRING)") \
+
+    # Parse JSON and add timestamp columns
+    parsed_df = kafka_df \
+        .selectExpr("CAST(value AS STRING)") \
         .select(from_json(col("value"), schema).alias("data")) \
         .select("data.*")
-    
-    # Assuming 'ts' is in milliseconds since epoch
-    parsed_df = parsed_df.withColumn("event_time", from_unixtime(col("ts") / 1000))
-    
-    # Select columns you want to display or process
-    final_df = parsed_df.select(
-        "event_time",
-        "artist",
-        "song",
-        "duration",
-        "sessionId",
-        "auth",
-        "level",
-        "itemInSession",
-        "city",
-        "zip",
-        "state",
-        "userAgent",
-        "lon",
-        "lat",
-        "userId",
-        "lastName",
-        "firstName",
-        "gender",
-        "registration"
-    )
-    
-    # Write the output to the console with trigger once
-    query = final_df.writeStream \
+
+    # Add timestamp columns for partitioning
+    processed_df = parsed_df \
+        .withColumn("event_time", from_unixtime(col("ts") / 1000)) \
+        .withColumn("year", year("event_time")) \
+        .withColumn("month", month("event_time")) \
+        .withColumn("day", dayofmonth("event_time")) \
+        .withColumn("hour", hour("event_time"))
+
+    # Write to HDFS
+    query = processed_df.writeStream \
+        .foreachBatch(process_batch) \
         .outputMode("append") \
-        .format("console") \
-        .option("truncate", "true") \
-        .option("numRows", 10) \
+        .option("checkpointLocation", "hdfs://namenode:9000/user/checkpoints/events") \
+        .trigger(processingTime="1 minute") \
         .start()
-    
-    # Await termination to complete the processing
+
+    # Wait for termination
     query.awaitTermination()
 
 if __name__ == "__main__":
