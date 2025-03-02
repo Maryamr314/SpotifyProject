@@ -1,0 +1,63 @@
+version: 2
+
+sources:
+  - name: bronze
+    database: default
+    schema: default
+    tables:
+      - name: listen_events
+        description: "Raw listen events data from Kafka ingested by Spark"
+        external:
+          location: "hdfs://namenode:9000/user/events/bronze"
+          options:
+            format: parquet
+            mergeSchema: true
+        columns:
+          - name: artist
+            description: "Name of the artist"
+          - name: song
+            description: "Name of the song"
+          - name: duration
+            description: "Duration of the song in seconds"
+          - name: ts
+            description: "Timestamp of the event in unix time"
+          - name: sessionId
+            description: "Session ID of the user"
+          - name: auth
+            description: "Authentication status"
+          - name: level
+            description: "Subscription level (free/paid)"
+          - name: itemInSession
+            description: "Item number in the session"
+          - name: city
+            description: "City of the user"
+          - name: zip
+            description: "Zip code of the user"
+          - name: state
+            description: "State of the user"
+          - name: userAgent
+            description: "User agent string"
+          - name: lon
+            description: "Longitude of the user"
+          - name: lat
+            description: "Latitude of the user"
+          - name: userId
+            description: "User ID"
+          - name: lastName
+            description: "Last name of the user"
+          - name: firstName
+            description: "First name of the user"
+          - name: gender
+            description: "Gender of the user"
+          - name: registration
+            description: "Registration timestamp in unix time"
+          - name: event_time
+            description: "Event timestamp in readable format"
+          - name: year
+            description: "Year partition"
+          - name: month
+            description: "Month partition"
+          - name: day
+            description: "Day partition"
+          - name: hour
+            description: "Hour partition"

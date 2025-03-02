@@ -206,10 +206,94 @@ services:
       - hadoop-network
       - kafka-network
 
+  # Adding DBT container for transformation logic
+  dbt:
+    image: ghcr.io/dbt-labs/dbt-spark:1.6.0
+    container_name: dbt
+    volumes:
+      - ./dbt:/usr/app
+    environment:
+      - DBT_PROFILES_DIR=/usr/app/profiles
+    depends_on:
+      - spark-master
+    networks:
+      - spark-network
+      - hadoop-network
+
+  # Adding Airflow for orchestration
+  airflow-webserver:
+    image: apache/airflow:2.7.1
+    container_name: airflow-webserver
+    command: webserver
+    ports:
+      - "8090:8080"
+    environment:
+      - AIRFLOW__CORE__EXECUTOR=LocalExecutor
+      - AIRFLOW__CORE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow:airflow@postgres:5432/airflow
+      - AIRFLOW__CORE__LOAD_EXAMPLES=False
+      - AIRFLOW__CORE__DAGS_FOLDER=/opt/airflow/dags
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./airflow/plugins:/opt/airflow/plugins
+      - ./dbt:/opt/dbt
+    depends_on:
+      - postgres
+    networks:
+      - airflow-network
+      - spark-network
+      - hadoop-network
+      - kafka-network
+
+  airflow-scheduler:
+    image: apache/airflow:2.7.1
+    container_name: airflow-scheduler
+    command: scheduler
+    environment:
+      - AIRFLOW__CORE__EXECUTOR=LocalExecutor
+      - AIRFLOW__CORE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow:airflow@postgres:5432/airflow
+      - AIRFLOW__CORE__LOAD_EXAMPLES=False
+      - AIRFLOW__CORE__DAGS_FOLDER=/opt/airflow/dags
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./airflow/plugins:/opt/airflow/plugins
+      - ./dbt:/opt/dbt
+    depends_on:
+      - postgres
+    networks:
+      - airflow-network
+
+  postgres:
+    image: postgres:15
+    container_name: postgres
+    environment:
+      - POSTGRES_USER=airflow
+      - POSTGRES_PASSWORD=airflow
+      - POSTGRES_DB=airflow
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - airflow-network
+
+  # ClickHouse for serving Gold layer data
+  clickhouse-server:
+    image: clickhouse/clickhouse-server:latest
+    container_name: clickhouse-server
+    ports:
+      - "8123:8123"
+      - "9000:9000"
+    volumes:
+      - clickhouse-data:/var/lib/clickhouse
+      - ./clickhouse/config:/etc/clickhouse-server/config.d
+    networks:
+      - hadoop-network
+      - clickhouse-network
+
 volumes:
   kafka-data:
   namenode-data:
   datanode-data:
+  postgres-data:
+  clickhouse-data:
 
 networks:
   kafka-network:
@@ -217,4 +301,8 @@ networks:
   hadoop-network:
     driver: bridge
   spark-network:
+    driver: bridge
+  airflow-network:
+    driver: bridge
+  clickhouse-network:
     driver: bridge

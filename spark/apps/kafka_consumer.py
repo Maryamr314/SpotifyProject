@@ -10,10 +10,12 @@ from pyspark.sql.types import (
 
 def create_spark_session():
     return SparkSession.builder \
-        .appName("KafkaListenEventsConsumer") \
+        .appName("KafkaListenEventsToBronze") \
         .config("spark.sql.sources.partitionOverwriteMode", "dynamic") \
         .config("hive.exec.dynamic.partition", "true") \
         .config("hive.exec.dynamic.partition.mode", "nonstrict") \
+        .config("spark.sql.catalog.spark_catalog", "org.apache.spark.sql.hudi.catalog.HoodieCatalog") \
+        .config("spark.sql.extensions", "org.apache.spark.sql.hudi.HoodieSparkSessionExtension") \
         .getOrCreate()
 
 def create_event_schema():
@@ -69,7 +71,7 @@ def main():
         .option("kafka.bootstrap.servers", kafka_bootstrap_servers) \
         .option("subscribe", kafka_topic) \
         .option("startingOffsets", "earliest") \
-        .option("maxOffsetsPerTrigger", 10) \
+        .option("maxOffsetsPerTrigger", 100) \
         .load()
 
     # Parse JSON and add timestamp columns
@@ -90,7 +92,7 @@ def main():
     query = processed_df.writeStream \
         .foreachBatch(process_batch) \
         .outputMode("append") \
-        .option("checkpointLocation", "hdfs://namenode:9000/user/checkpoints/events") \
+        .option("checkpointLocation", "hdfs://namenode:9000/user/checkpoints/events_bronze") \
         .trigger(processingTime="1 minute") \
         .start()
 
