@@ -1,0 +1,10 @@
+dbt_spotify_project:
+  outputs:
+    dev:
+      type: spark
+      method: thrift
+      host: spark-thrift-server
+      port: 10000
+      schema: silver
+      threads: 1
+  target: dev

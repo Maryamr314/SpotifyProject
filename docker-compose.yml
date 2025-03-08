@@ -14,9 +14,10 @@ services:
       CLUSTER_ID: "MKJ3OEVBNTcwNTJENDM2QK"
       KAFKA_PROCESS_ROLES: "broker,controller"
       KAFKA_CONTROLLER_QUORUM_VOTERS: "1@broker:29093"
+      KAFKA_KRAFT_MODE: "true"
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT,EXTERNAL:PLAINTEXT"
       KAFKA_LISTENERS: "PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:29093,EXTERNAL://0.0.0.0:29092"
-      KAFKA_ADVERTISED_LISTENERS: "PLAINTEXT://broker:9092,EXTERNAL://localhost:29092"
+      KAFKA_ADVERTISED_LISTENERS: "PLAINTEXT://broker:9092,CONTROLLER://broker:29093,EXTERNAL://localhost:29092"
       KAFKA_CONTROLLER_LISTENER_NAMES: "CONTROLLER"
       KAFKA_INTER_BROKER_LISTENER_NAME: "PLAINTEXT"
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: "1"
@@ -28,11 +29,13 @@ services:
       - kafka-data:/var/lib/kafka/data
     networks:
       - kafka-network
+      - monitoring
     healthcheck:
       test: ["CMD", "kafka-topics", "--list", "--bootstrap-server", "localhost:9092"]
       interval: 10s
       retries: 5
       start_period: 20s
+
 
   kafka-connect:
     image: confluentinc/cp-kafka-connect:latest
@@ -136,7 +139,7 @@ services:
     volumes:
       - namenode-data:/hadoop/dfs/name
     networks:
-      - hadoop-network
+     - hadoop-network
 
   datanode:
     image: bde2020/hadoop-datanode:2.0.0-hadoop3.2.1-java8
@@ -156,6 +159,7 @@ services:
       - datanode-data:/hadoop/dfs/data
     networks:
       - hadoop-network
+      - monitoring
     depends_on:
       - namenode
 
@@ -206,7 +210,38 @@ services:
       - hadoop-network
       - kafka-network
 
-  # Adding DBT container for transformation logic
+  spark-thrift:
+    image: apache/spark:latest
+    container_name: spark-thrift
+   # command: [ "/bin/bash", "-c",  "/opt/spark/bin/spark-class org.apache.spark.sql.hive.thriftserver.HiveThriftServer2 spark://spark-master:7077 --hiveconf hive.server2.thrift.port=10000"]
+    #environment:
+    #  - SPARK_MASTER_URL=spark://spark-master:7077
+    #  - SPARK_CONF_DIR=/opt/spark/conf
+  #  command: ["/bin/bash", "-c","tail -f /dev/null"]
+    command: ["/bin/bash", "-c", "/opt/spark/sbin/start-thriftserver.sh --master spark://spark-master:7077 --hiveconf hive.server2.thrift.port=10000 && tail -f /dev/null"]
+    #command: ["/bin/bash", "-c", " /opt/spark/sbin/start-thriftserver.sh --master spark://spark-master:7077 --hiveconf hive.server2.thrift.port=10000 --hiveconf hive.server2.thrift.bind.host=0.0.0.0"]
+    environment:
+      - SPARK_MASTER_URL=spark://spark-master:7077
+      - SPARK_WORKER_MEMORY=2G
+      - SPARK_WORKER_CORES=2
+      - SPARK_RPC_AUTHENTICATION_ENABLED=no
+      - SPARK_RPC_ENCRYPTION_ENABLED=no
+      - SPARK_LOCAL_STORAGE_ENCRYPTION_ENABLED=no
+      - SPARK_SSL_ENABLED=no
+      # Hadoop configurations
+      - CORE_CONF_fs_defaultFS=hdfs://namenode:9000
+    depends_on:
+      - spark-master
+      - spark-worker
+    ports:
+      - "10000:10000" 
+    networks:
+      - spark-network
+      - hadoop-network
+      - kafka-network
+      - monitoring
+
+
   dbt:
     image: ghcr.io/dbt-labs/dbt-spark:1.6.0
     container_name: dbt
@@ -215,94 +250,120 @@ services:
     environment:
       - DBT_PROFILES_DIR=/usr/app/profiles
     depends_on:
-      - spark-master
+      - spark-thrift
     networks:
-      - spark-network
-      - hadoop-network
-
-  # Adding Airflow for orchestration
-  airflow-webserver:
-    image: apache/airflow:2.7.1
-    container_name: airflow-webserver
-    command: webserver
-    ports:
-      - "8090:8080"
-    environment:
-      - AIRFLOW__CORE__EXECUTOR=LocalExecutor
-      - AIRFLOW__CORE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow:airflow@postgres:5432/airflow
-      - AIRFLOW__CORE__LOAD_EXAMPLES=False
-      - AIRFLOW__CORE__DAGS_FOLDER=/opt/airflow/dags
-    volumes:
-      - ./airflow/dags:/opt/airflow/dags
-      - ./airflow/plugins:/opt/airflow/plugins
-      - ./dbt:/opt/dbt
-    depends_on:
-      - postgres
-    networks:
-      - airflow-network
       - spark-network
       - hadoop-network
       - kafka-network
+      - monitoring
 
-  airflow-scheduler:
-    image: apache/airflow:2.7.1
-    container_name: airflow-scheduler
-    command: scheduler
-    environment:
-      - AIRFLOW__CORE__EXECUTOR=LocalExecutor
-      - AIRFLOW__CORE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow:airflow@postgres:5432/airflow
-      - AIRFLOW__CORE__LOAD_EXAMPLES=False
-      - AIRFLOW__CORE__DAGS_FOLDER=/opt/airflow/dags
+    command: debug
+
+
+  # **Prometheus**
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
     volumes:
-      - ./airflow/dags:/opt/airflow/dags
-      - ./airflow/plugins:/opt/airflow/plugins
-      - ./dbt:/opt/dbt
-    depends_on:
-      - postgres
-    networks:
-      - airflow-network
-
-  postgres:
-    image: postgres:15
-    container_name: postgres
-    environment:
-      - POSTGRES_USER=airflow
-      - POSTGRES_PASSWORD=airflow
-      - POSTGRES_DB=airflow
-    volumes:
-      - postgres-data:/var/lib/postgresql/data
-    networks:
-      - airflow-network
-
-  # ClickHouse for serving Gold layer data
-  clickhouse-server:
-    image: clickhouse/clickhouse-server:latest
-    container_name: clickhouse-server
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
     ports:
-      - "8123:8123"
-      - "9000:9000"
-    volumes:
-      - clickhouse-data:/var/lib/clickhouse
-      - ./clickhouse/config:/etc/clickhouse-server/config.d
+      - "9090:9090"
     networks:
-      - hadoop-network
-      - clickhouse-network
+      - monitoring
+
+  # **Grafana**
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    restart: unless-stopped
+
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: "admin"
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+    networks:
+      - monitoring
+    depends_on:
+      - prometheus
+
+
+
+  # Kafka Exporter for Prometheus
+  kafka-exporter:
+    image: danielqsj/kafka-exporter
+    container_name: kafka-exporter
+    ports:
+      - "9308:9308"
+    environment:
+      KAFKA_SERVER: "broker:9092"
+    networks:
+      - monitoring
+
+
+
+
+# Node Exporter
+  node-exporter:
+    image: prom/node-exporter:latest
+    container_name: node-exporter
+    restart: unless-stopped
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    command:
+      - '--path.procfs=/host/proc'
+      - '--path.rootfs=/rootfs'
+      - '--path.sysfs=/host/sys'
+      - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
+    expose:
+      - 9100
+    networks:
+      - monitoring
+
+  hadoop-exporter:
+    image: vqcuong96/hadoop_exporter:latest
+    container_name: hadoop-exporter
+    command:
+      - '-nn'
+      - 'http://namenode:9870/jmx'
+      - '-dn'
+      - 'http://datanode:9864/jmx'
+    expose:
+      - "9123"
+    networks:
+      - monitoring
+
+
+
+
+
+
 
 volumes:
   kafka-data:
   namenode-data:
   datanode-data:
-  postgres-data:
-  clickhouse-data:
+  prometheus_data: {}
+  grafana_data: {}
 
 networks:
   kafka-network:
+    name: spotifyproject_kafka-network  # ًں‘ˆ ظ†ط§ظ… ط´ط¨ع©ظ‡ ط±ط§ ظ‡ظ…ط§ظ‡ظ†ع¯ ع©ظ†
     driver: bridge
+
   hadoop-network:
+    name: spotifyproject_hadoop-network
     driver: bridge
+
   spark-network:
+    name: spotifyproject_spark-network
     driver: bridge
-  airflow-network:
+
+  monitoring:
+    name: spotifyproject_monitoring
     driver: bridge
-  clickhouse-network:
-    driver: bridge
+

@@ -4,10 +4,7 @@ spark:
     dev:
       type: spark
       method: thrift
-      host: spark-master
-      port: 10000
-      user: hadoop
       schema: default
-      connect_timeout: 60
-      connect_retries: 5
-      connect_retry_delay: 5
+      host: spark-thrift
+      port: 10000
+      threads: 1
